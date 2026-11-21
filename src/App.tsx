@@ -5,7 +5,6 @@
 
 import { useCallback, useState } from 'react';
 import { MotionConfig } from 'motion/react';
-import { AutomotiveUniverse3D } from './components/AutomotiveUniverse3D';
 import { ContactBookingSection } from './components/ContactBookingSection';
 import { CustomCursor } from './components/CustomCursor';
 import { FloatingWhatsApp } from './components/FloatingWhatsApp';
@@ -13,6 +12,7 @@ import { Footer } from './components/Footer';
 import { GallerySection } from './components/GallerySection';
 import { Header } from './components/Header';
 import { HeroSection } from './components/HeroSection';
+import { LazyUniverse3D } from './components/LazyUniverse3D';
 import { ServicesSection } from './components/ServicesSection';
 import { StudioAtmosphereCanvas } from './components/StudioAtmosphereCanvas';
 import { TransformationSection } from './components/TransformationSection';
@@ -57,7 +57,7 @@ export default function App() {
           <ServicesSection onSelectService={handleSelectSingleServiceAndOpen} />
           <VehiclesSegmentsSection onSelectCarService={handleSelectSingleServiceAndOpen} />
           <TransformationSection />
-          <AutomotiveUniverse3D />
+          <LazyUniverse3D />
           <GallerySection />
           <ContactBookingSection
             selectedServices={selectedServices}

@@ -5,7 +5,7 @@ export interface HeroVideoTransitionInput {
 }
 
 export interface HeroAutoPlayInput {
-  prefersReducedMotion: boolean;
+  prefersReducedMotion?: boolean;
   isPlaying: boolean;
   videoFailed: boolean;
   paused: boolean;
@@ -14,7 +14,7 @@ export interface HeroAutoPlayInput {
 
 /**
  * Transitions from the real Frame-0 poster overlay to the active video layer
- * only once playback has started with decoded frame data and no playback error.
+ * once playback has started with decoded frame data and no playback error.
  */
 export function canRevealHeroVideo({
   hasStartedPlaying,
@@ -27,15 +27,15 @@ export function canRevealHeroVideo({
 
 /**
  * Determines whether the hero video should programmatically trigger silent autoplay
- * when sufficient future frames are buffered.
+ * as soon as metadata/frames begin arriving (independent of OS reduced-motion settings,
+ * since showcase video is primary content).
  */
 export function shouldAttemptHeroAutoPlay({
-  prefersReducedMotion,
   isPlaying,
   videoFailed,
   paused,
   readyState,
 }: HeroAutoPlayInput): boolean {
-  if (prefersReducedMotion || !isPlaying || videoFailed) return false;
-  return paused && readyState >= 3;
+  if (!isPlaying || videoFailed) return false;
+  return paused && readyState >= 1;
 }

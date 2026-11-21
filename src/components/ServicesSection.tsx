@@ -1,7 +1,12 @@
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowUpRight, Sparkles } from 'lucide-react';
 import { motion, useReducedMotion, useScroll, useTransform } from 'motion/react';
 import { CONFIRMED_SERVICES, type GhostService } from '../data/ghost9';
+import { canRevealHeroVideo } from '../utils/heroMedia';
+import {
+  computeViewportPlaybackAction,
+  shouldMountLazyVideo,
+} from '../utils/videoPlayback';
 
 interface ServicesSectionProps {
   onSelectService: (serviceId: string) => void;
@@ -15,11 +20,153 @@ interface ServiceCardProps {
 }
 
 function ServiceCard({ service, index, spanClass, onSelect }: ServiceCardProps) {
-  const prefersReducedMotion = useReducedMotion();
+  const prefersReducedMotion = Boolean(useReducedMotion());
   const cardRef = useRef<HTMLDivElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
   const [tilt, setTilt] = useState({ rx: 0, ry: 0, mx: 50, my: 50, active: false });
   const [imgError, setImgError] = useState(false);
   const [videoError, setVideoError] = useState(false);
+  const [videoReady, setVideoReady] = useState(false);
+
+  const hasVideo = Boolean(service.video);
+  const shouldLoadVideo = shouldMountLazyVideo({
+    hasVideoSource: hasVideo,
+    videoFailed: videoError,
+  });
+
+  const revealIfMoving = useCallback(
+    (vid: HTMLVideoElement | null) => {
+      if (!vid || videoError) return;
+      if (
+        canRevealHeroVideo({
+          hasStartedPlaying: !vid.paused || vid.currentTime > 0,
+          readyState: vid.readyState,
+          videoFailed: videoError,
+        })
+      ) {
+        setVideoReady(true);
+      }
+    },
+    [videoError],
+  );
+
+  const setVideoNode = useCallback(
+    (node: HTMLVideoElement | null) => {
+      videoRef.current = node;
+      if (!node) return;
+      node.defaultMuted = true;
+      node.muted = true;
+      node.playsInline = true;
+      node.setAttribute('playsinline', '');
+      node.setAttribute('webkit-playsinline', '');
+      if (!videoError) {
+        node.play().catch(() => {});
+        revealIfMoving(node);
+      }
+    },
+    [revealIfMoving, videoError],
+  );
+
+  useEffect(() => {
+    if (!hasVideo || !shouldLoadVideo || videoError) return;
+    const vid = videoRef.current;
+    if (!vid) return;
+
+    const action = computeViewportPlaybackAction({
+      isLoaded: shouldLoadVideo,
+      userPaused: false,
+      videoFailed: videoError,
+    });
+
+    if (action === 'play' && vid.paused) {
+      vid.defaultMuted = true;
+      vid.muted = true;
+      vid.play().catch(() => {});
+    }
+    revealIfMoving(vid);
+  }, [hasVideo, revealIfMoving, shouldLoadVideo, videoError]);
+
+  // Ensure playback resumes when entering viewport, returning to tab, or after first touch on strict mobile Safari
+  useEffect(() => {
+    if (!hasVideo || !shouldLoadVideo || videoError) return;
+
+    const tryPlay = () => {
+      const vid = videoRef.current;
+      if (!vid || document.hidden || videoError) return;
+      if (vid.paused) {
+        vid.defaultMuted = true;
+        vid.muted = true;
+        vid.play().catch(() => {});
+      }
+      revealIfMoving(vid);
+    };
+
+    const el = cardRef.current;
+    const observer =
+      el && typeof IntersectionObserver !== 'undefined'
+        ? new IntersectionObserver(
+            (entries) => {
+              if (entries[0]?.isIntersecting) {
+                tryPlay();
+              }
+            },
+            { threshold: 0.05 },
+          )
+        : null;
+    if (observer && el) observer.observe(el);
+
+    const onVisibility = () => {
+      const vid = videoRef.current;
+      if (!vid) return;
+      if (document.hidden) {
+        if (!vid.paused) vid.pause();
+      } else {
+        tryPlay();
+      }
+    };
+
+    window.addEventListener('pointerdown', tryPlay, { passive: true });
+    window.addEventListener('touchstart', tryPlay, { passive: true });
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('pointerdown', tryPlay);
+      window.removeEventListener('touchstart', tryPlay);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [hasVideo, revealIfMoving, shouldLoadVideo, videoError]);
+
+  const handleVideoLoadedOrCanPlay = (vid: HTMLVideoElement) => {
+    if (videoError) return;
+    if (vid.paused) {
+      vid.defaultMuted = true;
+      vid.muted = true;
+      vid.play().catch(() => {});
+    }
+    revealIfMoving(vid);
+  };
+
+  const handleVideoPlaying = (vid: HTMLVideoElement) => {
+    if (
+      !canRevealHeroVideo({
+        hasStartedPlaying: true,
+        readyState: Math.max(vid.readyState, 2),
+        videoFailed: videoError,
+      })
+    ) {
+      return;
+    }
+    setVideoReady(true);
+  };
+
+  const handleVideoTimeUpdate = (vid: HTMLVideoElement) => {
+    if (videoError) return;
+    if (vid.currentTime > 0 && !vid.paused && !videoReady) {
+      setVideoReady(true);
+    }
+  };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (prefersReducedMotion || !cardRef.current) return;
@@ -38,8 +185,6 @@ function ServiceCard({ service, index, spanClass, onSelect }: ServiceCardProps) 
   const handleMouseLeave = () => {
     setTilt({ rx: 0, ry: 0, mx: 50, my: 50, active: false });
   };
-
-  const showVideo = Boolean(service.video) && !videoError;
 
   return (
     <motion.article
@@ -70,30 +215,44 @@ function ServiceCard({ service, index, spanClass, onSelect }: ServiceCardProps) 
         }}
       />
 
-      {/* Media Frame (Real Video for Polimento & Detalhamento, High-Impact Studio Photo otherwise) */}
+      {/* Reserved-aspect Media Frame: Instant Real WebP Cover + Immediate Preloaded Moving Video */}
       <div className="relative h-64 w-full overflow-hidden bg-[#08090C] sm:h-72">
-        {showVideo ? (
+        {hasVideo && shouldLoadVideo && !videoError && (
           <video
+            ref={setVideoNode}
             data-testid={`service-video-${service.id}`}
             src={service.video}
             poster={service.image}
-            autoPlay={!prefersReducedMotion}
+            autoPlay
             muted
             loop
             playsInline
-            preload="metadata"
+            preload="auto"
             aria-label={service.videoLabel ?? service.title}
+            onLoadedMetadata={(e) => handleVideoLoadedOrCanPlay(e.currentTarget)}
+            onLoadedData={(e) => handleVideoLoadedOrCanPlay(e.currentTarget)}
+            onCanPlay={(e) => handleVideoLoadedOrCanPlay(e.currentTarget)}
+            onPlaying={(e) => handleVideoPlaying(e.currentTarget)}
+            onTimeUpdate={(e) => handleVideoTimeUpdate(e.currentTarget)}
             onError={() => setVideoError(true)}
             className="h-full w-full object-cover object-[50%_40%] transition-transform duration-700 ease-out group-hover:scale-105"
           />
-        ) : !imgError ? (
+        )}
+
+        {!imgError ? (
           <img
+            data-testid={hasVideo ? `service-poster-${service.id}` : undefined}
             src={service.image}
             alt={service.imageAlt}
             referrerPolicy="no-referrer"
-            loading="lazy"
+            loading={hasVideo ? 'eager' : 'lazy'}
+            decoding="async"
             onError={() => setImgError(true)}
-            className="h-full w-full object-cover transition-transform duration-700 ease-out group-hover:scale-105"
+            className={`pointer-events-none absolute inset-0 h-full w-full object-cover ${
+              hasVideo ? 'object-[50%_40%]' : 'object-center'
+            } transition-all duration-500 ease-out group-hover:scale-105 ${
+              hasVideo && videoReady && !videoError ? 'opacity-0' : 'opacity-100'
+            }`}
           />
         ) : (
           <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-[radial-gradient(circle_at_50%_40%,rgba(225,29,46,0.2),#08090C_75%)] p-6 text-center">

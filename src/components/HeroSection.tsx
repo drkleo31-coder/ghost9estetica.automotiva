@@ -3,6 +3,7 @@ import { ArrowDownRight, CalendarCheck2, Pause, Play } from 'lucide-react';
 import { motion, useReducedMotion, useScroll, useTransform } from 'motion/react';
 import { BRAND_INFO, HERO_MEDIA } from '../data/ghost9';
 import { canRevealHeroVideo, shouldAttemptHeroAutoPlay } from '../utils/heroMedia';
+import { computeViewportPlaybackAction } from '../utils/videoPlayback';
 
 interface HeroSectionProps {
   onOpenBooking: () => void;
@@ -11,15 +12,18 @@ interface HeroSectionProps {
 export function HeroSection({ onOpenBooking }: HeroSectionProps) {
   const prefersReducedMotion = Boolean(useReducedMotion());
   const sectionRef = useRef<HTMLElement | null>(null);
-  const desktopVideoRef = useRef<HTMLVideoElement | null>(null);
-  const mobileVideoRef = useRef<HTMLVideoElement | null>(null);
+  const activeVideoRef = useRef<HTMLVideoElement | null>(null);
 
+  const [isDesktop, setIsDesktop] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(min-width: 1024px)').matches : true,
+  );
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
   const [posterImgFailed, setPosterImgFailed] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
-  const [isPlaying, setIsPlaying] = useState(!prefersReducedMotion);
-  const [desktopVideoReady, setDesktopVideoReady] = useState(false);
-  const [mobileVideoReady, setMobileVideoReady] = useState(false);
+  const [userPaused, setUserPaused] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(true);
+  const [videoReady, setVideoReady] = useState(false);
+  const [showBufferingHint, setShowBufferingHint] = useState(false);
 
   const { scrollYProgress } = useScroll({
     target: sectionRef,
@@ -28,88 +32,162 @@ export function HeroSection({ onOpenBooking }: HeroSectionProps) {
   const bgScrollY = useTransform(scrollYProgress, [0, 1], ['0%', '14%']);
   const reelScrollY = useTransform(scrollYProgress, [0, 1], [0, 42]);
 
-  const setMutedAttributes = useCallback((node: HTMLVideoElement | null) => {
-    if (!node) return;
-    node.defaultMuted = true;
-    node.muted = true;
+  useEffect(() => {
+    const mql = window.matchMedia('(min-width: 1024px)');
+    const onChange = () => {
+      setIsDesktop(mql.matches);
+      setVideoReady(false);
+    };
+    setIsDesktop(mql.matches);
+    mql.addEventListener('change', onChange);
+    return () => mql.removeEventListener('change', onChange);
   }, []);
 
-  const setMobileVideoNode = useCallback(
-    (node: HTMLVideoElement | null) => {
-      mobileVideoRef.current = node;
-      setMutedAttributes(node);
+  useEffect(() => {
+    if (videoReady || videoFailed || userPaused) {
+      setShowBufferingHint(false);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setShowBufferingHint(true);
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [videoReady, videoFailed, userPaused]);
+
+  const revealIfMoving = useCallback(
+    (video: HTMLVideoElement | null) => {
+      if (!video || videoFailed) return;
+      if (
+        canRevealHeroVideo({
+          hasStartedPlaying: !video.paused || video.currentTime > 0,
+          readyState: video.readyState,
+          videoFailed,
+        })
+      ) {
+        setVideoReady(true);
+        setIsPlaying(true);
+        setShowBufferingHint(false);
+      }
     },
-    [setMutedAttributes],
+    [videoFailed],
   );
 
-  const setDesktopVideoNode = useCallback(
+  const setActiveVideoNode = useCallback(
     (node: HTMLVideoElement | null) => {
-      desktopVideoRef.current = node;
-      setMutedAttributes(node);
+      activeVideoRef.current = node;
+      if (!node) return;
+      node.defaultMuted = true;
+      node.muted = true;
+      node.playsInline = true;
+      node.setAttribute('playsinline', '');
+      node.setAttribute('webkit-playsinline', '');
+      if (!userPaused && !videoFailed) {
+        node.play().catch(() => {});
+        revealIfMoving(node);
+      }
     },
-    [setMutedAttributes],
+    [revealIfMoving, userPaused, videoFailed],
   );
 
   useEffect(() => {
-    const syncCachedPlayback = (
-      video: HTMLVideoElement | null,
-      setReady: (ready: boolean) => void,
-    ) => {
-      if (!video) return;
+    const video = activeVideoRef.current;
+    if (!video) return;
+
+    const action = computeViewportPlaybackAction({
+      isLoaded: true,
+      isVisible: true,
+      userPaused,
+      videoFailed,
+    });
+
+    if (action === 'pause') {
+      if (!video.paused) {
+        video.pause();
+      }
+      setIsPlaying(false);
+      return;
+    }
+
+    if (action === 'play') {
+      setIsPlaying(true);
+      revealIfMoving(video);
       if (
-        canRevealHeroVideo({
-          hasStartedPlaying: !video.paused && video.currentTime >= 0,
-          readyState: video.readyState,
-          videoFailed,
-        })
-      ) {
-        setReady(true);
-      } else if (
         shouldAttemptHeroAutoPlay({
-          prefersReducedMotion,
-          isPlaying,
+          isPlaying: true,
           videoFailed,
           paused: video.paused,
           readyState: video.readyState,
-        })
+        }) ||
+        video.paused
       ) {
         video.play().catch(() => {});
       }
+    }
+  }, [isDesktop, revealIfMoving, userPaused, videoFailed]);
+
+  // Fallback for strict iOS Low Power Mode / autoplay policies + background tab resume
+  useEffect(() => {
+    const tryResume = () => {
+      const video = activeVideoRef.current;
+      if (!video || userPaused || videoFailed || document.hidden) return;
+      if (video.paused) {
+        video.defaultMuted = true;
+        video.muted = true;
+        video.play().catch(() => {});
+      }
+      revealIfMoving(video);
     };
 
-    syncCachedPlayback(desktopVideoRef.current, setDesktopVideoReady);
-    syncCachedPlayback(mobileVideoRef.current, setMobileVideoReady);
-  }, [isPlaying, prefersReducedMotion, videoFailed]);
+    const onVisibility = () => {
+      const video = activeVideoRef.current;
+      if (!video) return;
+      if (document.hidden) {
+        if (!video.paused) video.pause();
+      } else {
+        tryResume();
+      }
+    };
 
-  const handleVideoCanPlay = (video: HTMLVideoElement | null) => {
-    if (!video) return;
-    if (
-      shouldAttemptHeroAutoPlay({
-        prefersReducedMotion,
-        isPlaying,
-        videoFailed,
-        paused: video.paused,
-        readyState: video.readyState,
-      })
-    ) {
+    window.addEventListener('pointerdown', tryResume, { passive: true });
+    window.addEventListener('touchstart', tryResume, { passive: true });
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pointerdown', tryResume);
+      window.removeEventListener('touchstart', tryResume);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [revealIfMoving, userPaused, videoFailed]);
+
+  const handleVideoLoadedOrCanPlay = (video: HTMLVideoElement | null) => {
+    if (!video || userPaused || videoFailed) return;
+    if (video.paused) {
+      video.defaultMuted = true;
+      video.muted = true;
       video.play().catch(() => {});
     }
+    revealIfMoving(video);
   };
 
-  const handleVideoPlaying = (
-    video: HTMLVideoElement | null,
-    setReady: (ready: boolean) => void,
-  ) => {
+  const handleVideoPlaying = (video: HTMLVideoElement | null) => {
     if (!video) return;
     const ready = canRevealHeroVideo({
       hasStartedPlaying: true,
-      readyState: video.readyState,
+      readyState: Math.max(video.readyState, 2),
       videoFailed,
     });
     if (!ready) return;
-    requestAnimationFrame(() => {
-      setReady(true);
-    });
+    setVideoReady(true);
+    setIsPlaying(true);
+    setShowBufferingHint(false);
+  };
+
+  const handleVideoTimeUpdate = (video: HTMLVideoElement | null) => {
+    if (!video || videoFailed) return;
+    if (video.currentTime > 0 && !video.paused && !videoReady) {
+      setVideoReady(true);
+      setIsPlaying(true);
+      setShowBufferingHint(false);
+    }
   };
 
   const handlePointerMove = (e: React.MouseEvent<HTMLElement>) => {
@@ -125,16 +203,18 @@ export function HeroSection({ onOpenBooking }: HeroSectionProps) {
   };
 
   const togglePlayback = () => {
-    const next = !isPlaying;
-    setIsPlaying(next);
-    [desktopVideoRef.current, mobileVideoRef.current].forEach((vid) => {
-      if (!vid) return;
-      if (next) {
-        vid.play().catch(() => {});
-      } else {
-        vid.pause();
-      }
-    });
+    const vid = activeVideoRef.current;
+    const nextPaused = isPlaying;
+    setUserPaused(nextPaused);
+    setIsPlaying(!nextPaused);
+    if (!vid) return;
+    if (nextPaused) {
+      vid.pause();
+    } else {
+      vid.defaultMuted = true;
+      vid.muted = true;
+      vid.play().catch(() => {});
+    }
   };
 
   return (
@@ -145,75 +225,80 @@ export function HeroSection({ onOpenBooking }: HeroSectionProps) {
       onMouseLeave={handlePointerLeave}
       className="relative flex min-h-[100svh] items-center overflow-hidden pt-24 pb-16 sm:pb-20"
     >
-      {/* Background Depth Layer: Mobile Real Video + Seamless Frame-0 Cover, Desktop Real Studio Backdrop */}
+      {/* Background Depth Layer: Single Active Mobile Video OR Desktop Real Studio Backdrop */}
       <motion.div
         style={prefersReducedMotion ? undefined : { y: bgScrollY }}
         className="pointer-events-none absolute inset-0 z-0 overflow-hidden"
       >
-        {/* Mobile full-bleed stage (9:16 matches mobile portrait naturally without distortion) */}
-        <div className="relative h-full w-full lg:hidden">
-          {!videoFailed && (
-            <video
-              ref={setMobileVideoNode}
-              data-testid="hero-mobile-video"
-              src={HERO_MEDIA.video}
-              poster={HERO_MEDIA.poster}
-              autoPlay={!prefersReducedMotion}
-              muted
-              loop
-              playsInline
-              preload="auto"
-              aria-label={HERO_MEDIA.videoLabel}
-              onCanPlay={(e) => handleVideoCanPlay(e.currentTarget)}
-              onPlaying={(e) => handleVideoPlaying(e.currentTarget, setMobileVideoReady)}
-              onError={() => setVideoFailed(true)}
-              className="h-full w-full object-cover object-center brightness-[0.72] contrast-[1.08]"
-            />
-          )}
+        {/* Mobile full-bleed stage (mounted ONLY on <1024px to prevent duplicate decoders/requests) */}
+        {!isDesktop && (
+          <div className="relative h-full w-full">
+            {!videoFailed && (
+              <video
+                ref={setActiveVideoNode}
+                data-testid="hero-mobile-video"
+                src={HERO_MEDIA.video}
+                poster={HERO_MEDIA.poster}
+                autoPlay
+                muted
+                loop
+                playsInline
+                preload="auto"
+                aria-label={HERO_MEDIA.videoLabel}
+                onLoadedMetadata={(e) => handleVideoLoadedOrCanPlay(e.currentTarget)}
+                onLoadedData={(e) => handleVideoLoadedOrCanPlay(e.currentTarget)}
+                onCanPlay={(e) => handleVideoLoadedOrCanPlay(e.currentTarget)}
+                onPlaying={(e) => handleVideoPlaying(e.currentTarget)}
+                onTimeUpdate={(e) => handleVideoTimeUpdate(e.currentTarget)}
+                onError={() => setVideoFailed(true)}
+                className="h-full w-full object-cover object-center brightness-[0.72] contrast-[1.08]"
+              />
+            )}
 
-          {/* Real Frame-0 Cover stays visible with identical framing until playback starts */}
-          {!posterImgFailed && (
-            <img
-              data-testid="hero-mobile-poster"
-              src={HERO_MEDIA.poster}
-              alt={HERO_MEDIA.posterAlt}
-              fetchPriority="high"
-              loading="eager"
-              decoding="sync"
-              onError={() => setPosterImgFailed(true)}
-              className={`absolute inset-0 h-full w-full object-cover object-center brightness-[0.72] contrast-[1.08] transition-opacity duration-500 ease-out ${
-                mobileVideoReady && !videoFailed ? 'opacity-0' : 'opacity-100'
-              }`}
-            />
-          )}
-        </div>
+            {!posterImgFailed && (
+              <img
+                data-testid="hero-mobile-poster"
+                src={HERO_MEDIA.poster}
+                alt={HERO_MEDIA.posterAlt}
+                fetchPriority="high"
+                loading="eager"
+                decoding="sync"
+                onError={() => setPosterImgFailed(true)}
+                className={`pointer-events-none absolute inset-0 h-full w-full object-cover object-center brightness-[0.72] contrast-[1.08] transition-opacity duration-500 ease-out ${
+                  videoReady && !videoFailed ? 'opacity-0' : 'opacity-100'
+                }`}
+              />
+            )}
+          </div>
+        )}
 
         {/* Desktop ambient backdrop derived from the real car frame (no generic placeholder) */}
-        {!posterImgFailed ? (
-          <motion.div
-            className="hidden h-full w-full lg:block"
-            animate={
-              prefersReducedMotion
-                ? undefined
-                : {
-                    x: pointer.x * -14,
-                    y: pointer.y * -9,
-                    scale: 1.06,
-                  }
-            }
-            transition={{ type: 'spring', stiffness: 65, damping: 24, mass: 0.9 }}
-          >
-            <img
-              src={HERO_MEDIA.poster}
-              alt=""
-              aria-hidden="true"
-              loading="eager"
-              className="h-full w-full scale-105 object-cover object-center opacity-30 brightness-[0.55] contrast-[1.1] blur-[3px]"
-            />
-          </motion.div>
-        ) : (
-          <div className="hidden h-full w-full bg-[radial-gradient(circle_at_70%_40%,rgba(225,29,46,0.22),#050507_70%)] lg:block" />
-        )}
+        {isDesktop &&
+          (!posterImgFailed ? (
+            <motion.div
+              className="h-full w-full"
+              animate={
+                prefersReducedMotion
+                  ? undefined
+                  : {
+                      x: pointer.x * -14,
+                      y: pointer.y * -9,
+                      scale: 1.06,
+                    }
+              }
+              transition={{ type: 'spring', stiffness: 65, damping: 24, mass: 0.9 }}
+            >
+              <img
+                src={HERO_MEDIA.poster}
+                alt=""
+                aria-hidden="true"
+                loading="eager"
+                className="h-full w-full scale-105 object-cover object-center opacity-30 brightness-[0.55] contrast-[1.1] blur-[3px]"
+              />
+            </motion.div>
+          ) : (
+            <div className="h-full w-full bg-[radial-gradient(circle_at_70%_40%,rgba(225,29,46,0.22),#050507_70%)]" />
+          ))}
 
         {/* Cinematic Dark Masks & Crimson Studio Rim Lighting */}
         <div
@@ -248,6 +333,8 @@ export function HeroSection({ onOpenBooking }: HeroSectionProps) {
               src={BRAND_INFO.logoPath}
               alt="Mascote e identidade oficial GHOST 9 Estética Automotiva"
               referrerPolicy="no-referrer"
+              fetchPriority="high"
+              decoding="async"
               className="h-14 w-14 shrink-0 rounded-xl border border-white/20 bg-[#0D0E12] object-cover shadow-[0_8px_24px_rgba(225,29,46,0.28)] sm:h-16 sm:w-16"
             />
             <div className="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#E5E7EB]">
@@ -320,94 +407,127 @@ export function HeroSection({ onOpenBooking }: HeroSectionProps) {
               <ArrowDownRight className="h-4 w-4 text-[#E11D2E]" />
             </a>
           </motion.div>
+
+          {/* Subtle mobile buffering indicator when slow network delays playback >350ms */}
+          {!isDesktop && showBufferingHint && !videoReady && !videoFailed && (
+            <div
+              data-testid="hero-mobile-loading-hint"
+              className="mt-5 inline-flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.14em] text-[#D1D5DB]"
+            >
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#E11D2E]" />
+              <span>Carregando vídeo do estúdio...</span>
+            </div>
+          )}
         </div>
 
-        {/* Desktop Cinema-Masked Real Video Showcase (Frame-0 Cover -> Seamless Playback) */}
-        <motion.div
-          style={prefersReducedMotion ? undefined : { y: reelScrollY, perspective: 1100 }}
-          initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.96 }}
-          animate={
-            prefersReducedMotion
-              ? { opacity: 1 }
-              : {
-                  opacity: 1,
-                  scale: 1,
-                  rotateY: pointer.x * 5,
-                  rotateX: pointer.y * -4,
-                }
-          }
-          transition={{ duration: 0.7, delay: 0.16, ease: [0.16, 1, 0.3, 1] }}
-          className="hidden lg:flex lg:col-span-5 lg:justify-end"
-        >
-          <div className="relative aspect-[9/14] w-full max-w-[360px] overflow-hidden rounded-2xl border border-white/15 bg-[#050507] shadow-[0_28px_70px_rgba(0,0,0,0.85)]">
-            {!videoFailed && (
-              <video
-                ref={setDesktopVideoNode}
-                data-testid="hero-showcase-video"
-                src={HERO_MEDIA.video}
-                poster={HERO_MEDIA.poster}
-                autoPlay={!prefersReducedMotion}
-                muted
-                loop
-                playsInline
-                preload="auto"
-                aria-label={HERO_MEDIA.videoLabel}
-                onCanPlay={(e) => handleVideoCanPlay(e.currentTarget)}
-                onPlaying={(e) => handleVideoPlaying(e.currentTarget, setDesktopVideoReady)}
-                onError={() => setVideoFailed(true)}
-                className="h-full w-full object-cover object-center"
-              />
-            )}
-
-            {/* Real Frame-0 Cover locked to exact same framing until playback begins */}
-            {!posterImgFailed && (
-              <img
-                data-testid="hero-desktop-poster"
-                src={HERO_MEDIA.poster}
-                alt={HERO_MEDIA.posterAlt}
-                fetchPriority="high"
-                loading="eager"
-                decoding="sync"
-                onError={() => setPosterImgFailed(true)}
-                className={`pointer-events-none absolute inset-0 h-full w-full object-cover object-center transition-opacity duration-500 ease-out ${
-                  desktopVideoReady && !videoFailed ? 'opacity-0' : 'opacity-100'
-                }`}
-              />
-            )}
-
-            {/* Feathered Cinema Mask & Crimson Rim Overlay */}
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#050507] via-transparent to-[#050507]/55"
-            />
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-inset ring-[#E11D2E]/30"
-            />
-
-            <div className="absolute inset-x-4 bottom-4 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#E11D2E]">
-                  Estúdio GHOST 9
-                </p>
-                <p className="text-xs font-medium text-white/90">
-                  Brilho e reflexo real em cabine
-                </p>
-              </div>
-
+        {/* Desktop Cinema-Masked Real Video Showcase (Mounted ONLY on >=1024px) */}
+        {isDesktop && (
+          <motion.div
+            style={prefersReducedMotion ? undefined : { y: reelScrollY, perspective: 1100 }}
+            initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.96 }}
+            animate={
+              prefersReducedMotion
+                ? { opacity: 1 }
+                : {
+                    opacity: 1,
+                    scale: 1,
+                    rotateY: pointer.x * 5,
+                    rotateX: pointer.y * -4,
+                  }
+            }
+            transition={{ duration: 0.7, delay: 0.16, ease: [0.16, 1, 0.3, 1] }}
+            className="flex lg:col-span-5 lg:justify-end"
+          >
+            <div className="relative aspect-[9/14] w-full max-w-[360px] overflow-hidden rounded-2xl border border-white/15 bg-[#050507] shadow-[0_28px_70px_rgba(0,0,0,0.85)]">
               {!videoFailed && (
-                <button
-                  type="button"
-                  onClick={togglePlayback}
-                  aria-label={isPlaying ? 'Pausar vídeo da abertura' : 'Reproduzir vídeo da abertura'}
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/25 bg-[#050507]/85 text-white transition-colors hover:border-[#E11D2E] hover:bg-[#E11D2E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-                >
-                  {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-                </button>
+                <video
+                  ref={setActiveVideoNode}
+                  data-testid="hero-showcase-video"
+                  src={HERO_MEDIA.video}
+                  poster={HERO_MEDIA.poster}
+                  autoPlay
+                  muted
+                  loop
+                  playsInline
+                  preload="auto"
+                  aria-label={HERO_MEDIA.videoLabel}
+                  onLoadedMetadata={(e) => handleVideoLoadedOrCanPlay(e.currentTarget)}
+                  onLoadedData={(e) => handleVideoLoadedOrCanPlay(e.currentTarget)}
+                  onCanPlay={(e) => handleVideoLoadedOrCanPlay(e.currentTarget)}
+                  onPlaying={(e) => handleVideoPlaying(e.currentTarget)}
+                  onTimeUpdate={(e) => handleVideoTimeUpdate(e.currentTarget)}
+                  onError={() => setVideoFailed(true)}
+                  className="h-full w-full object-cover object-center"
+                />
               )}
+
+              {/* Real Frame-0 Cover locked to exact same framing until playback begins */}
+              {!posterImgFailed && (
+                <img
+                  data-testid="hero-desktop-poster"
+                  src={HERO_MEDIA.poster}
+                  alt={HERO_MEDIA.posterAlt}
+                  fetchPriority="high"
+                  loading="eager"
+                  decoding="sync"
+                  onError={() => setPosterImgFailed(true)}
+                  className={`pointer-events-none absolute inset-0 h-full w-full object-cover object-center transition-opacity duration-500 ease-out ${
+                    videoReady && !videoFailed ? 'opacity-0' : 'opacity-100'
+                  }`}
+                />
+              )}
+
+              {/* Feathered Cinema Mask & Crimson Rim Overlay */}
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#050507] via-transparent to-[#050507]/55"
+              />
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-inset ring-[#E11D2E]/30"
+              />
+
+              {/* Subtle buffering shimmer line + status when loading >350ms */}
+              {showBufferingHint && !videoReady && !videoFailed && (
+                <div
+                  data-testid="hero-desktop-loading-hint"
+                  aria-live="polite"
+                  className="pointer-events-none absolute inset-x-0 top-0"
+                >
+                  <div className="h-[2px] w-full overflow-hidden bg-white/10">
+                    <div className="h-full w-1/2 animate-pulse bg-[#E11D2E]" />
+                  </div>
+                  <div className="m-3 inline-flex items-center gap-2 rounded-md border border-white/15 bg-[#050507]/85 px-2.5 py-1 text-[11px] font-medium text-[#E5E7EB]">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#E11D2E]" />
+                    <span>Carregando vídeo...</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="absolute inset-x-4 bottom-4 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#E11D2E]">
+                    Estúdio GHOST 9
+                  </p>
+                  <p className="text-xs font-medium text-white/90">
+                    Brilho e reflexo real em cabine
+                  </p>
+                </div>
+
+                {!videoFailed && (
+                  <button
+                    type="button"
+                    onClick={togglePlayback}
+                    aria-label={isPlaying ? 'Pausar vídeo da abertura' : 'Reproduzir vídeo da abertura'}
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/25 bg-[#050507]/85 text-white transition-colors hover:border-[#E11D2E] hover:bg-[#E11D2E] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+                  >
+                    {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
-        </motion.div>
+          </motion.div>
+        )}
       </div>
     </section>
   );

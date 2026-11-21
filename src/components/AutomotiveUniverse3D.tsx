@@ -502,6 +502,8 @@ export function AutomotiveUniverse3D() {
     let curDistance = 6.4;
     let frameId = 0;
     let isDisposed = false;
+    let isSectionVisible = true;
+    let isLoopScheduled = false;
     let lastTime = performance.now();
 
     const updateScrollProgress = () => {
@@ -542,7 +544,11 @@ export function AutomotiveUniverse3D() {
         const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
         gl.flush();
         const poll = () => {
-          if (isDisposed) return;
+          if (isDisposed || !isSectionVisible || document.hidden) {
+            if (sync) gl.deleteSync(sync);
+            isLoopScheduled = false;
+            return;
+          }
           const status = sync && gl.getSyncParameter(sync, gl.SYNC_STATUS);
           if (status === gl.UNSIGNALED) {
             frameId = window.setTimeout(poll, 5);
@@ -558,6 +564,7 @@ export function AutomotiveUniverse3D() {
     }
 
     function tick(now = performance.now()) {
+      isLoopScheduled = false;
       if (isDisposed) return;
       const dt = Math.min(0.05, Math.max(0.001, (now - lastTime) / 1000));
       lastTime = now;
@@ -621,7 +628,8 @@ export function AutomotiveUniverse3D() {
 
       renderer.render(scene, camera);
 
-      if (reducedMotion) return;
+      if (reducedMotion || !isSectionVisible || document.hidden) return;
+      isLoopScheduled = true;
       if (isSoftwareGl) {
         afterDraw(() => tick(performance.now()));
       } else {
@@ -629,12 +637,61 @@ export function AutomotiveUniverse3D() {
       }
     }
 
+    const scheduleLoop = () => {
+      if (isDisposed || reducedMotion || isLoopScheduled || !isSectionVisible || document.hidden) {
+        return;
+      }
+      isLoopScheduled = true;
+      lastTime = performance.now();
+      frameId = requestAnimationFrame(tick);
+    };
+
+    const stopLoop = () => {
+      isLoopScheduled = false;
+      cancelAnimationFrame(frameId);
+      clearTimeout(frameId);
+    };
+
+    const targetEl = sectionRef.current || container;
+    const visibilityObserver =
+      typeof IntersectionObserver !== 'undefined'
+        ? new IntersectionObserver(
+            (entries) => {
+              const entry = entries[0];
+              const nextVisible = Boolean(entry?.isIntersecting);
+              if (nextVisible === isSectionVisible) return;
+              isSectionVisible = nextVisible;
+              if (nextVisible) {
+                scheduleLoop();
+              } else {
+                stopLoop();
+              }
+            },
+            { rootMargin: '120px 0px', threshold: 0.01 }
+          )
+        : null;
+
+    if (visibilityObserver && targetEl) {
+      visibilityObserver.observe(targetEl);
+    }
+
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        stopLoop();
+      } else if (isSectionVisible) {
+        scheduleLoop();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    // Render initial frame immediately, then rely on observer/visibility for continuous loop
     tick(performance.now());
 
     return () => {
       isDisposed = true;
-      cancelAnimationFrame(frameId);
-      clearTimeout(frameId);
+      stopLoop();
+      visibilityObserver?.disconnect();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       renderer.domElement.removeEventListener('webglcontextlost', onContextLost);
       renderer.domElement.removeEventListener('webglcontextrestored', onContextRestored);
       window.removeEventListener('scroll', updateScrollProgress);

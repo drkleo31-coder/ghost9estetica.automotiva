@@ -116,6 +116,8 @@ export function TransformationSection() {
                 src={TRANSFORMATION_MEDIA.afterImage}
                 alt={TRANSFORMATION_MEDIA.afterAlt}
                 referrerPolicy="no-referrer"
+                loading="lazy"
+                decoding="async"
                 draggable={false}
                 onError={() => setAfterError(true)}
                 className="h-full w-full object-cover"
@@ -141,6 +143,8 @@ export function TransformationSection() {
                 src={TRANSFORMATION_MEDIA.beforeImage}
                 alt={TRANSFORMATION_MEDIA.beforeAlt}
                 referrerPolicy="no-referrer"
+                loading="lazy"
+                decoding="async"
                 draggable={false}
                 onError={() => setBeforeError(true)}
                 className="h-full w-full object-cover"

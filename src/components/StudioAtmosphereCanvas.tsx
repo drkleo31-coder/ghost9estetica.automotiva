@@ -195,21 +195,39 @@ export function StudioAtmosphereCanvas() {
         ctx.arc(parallaxX, parallaxY, p.radius * (0.65 + p.z * 0.55), 0, Math.PI * 2);
         if (p.isRed) {
           ctx.fillStyle = `rgba(225, 29, 46, ${p.alpha})`;
-          ctx.shadowColor = 'rgba(225, 29, 46, 0.65)';
-          ctx.shadowBlur = 8 * p.z;
+          if (!lowPowerDevice) {
+            ctx.shadowColor = 'rgba(225, 29, 46, 0.65)';
+            ctx.shadowBlur = 8 * p.z;
+          }
         } else {
           ctx.fillStyle = `rgba(244, 245, 247, ${p.alpha * 0.72})`;
-          ctx.shadowColor = 'rgba(244, 245, 247, 0.35)';
-          ctx.shadowBlur = 4 * p.z;
+          if (!lowPowerDevice) {
+            ctx.shadowColor = 'rgba(244, 245, 247, 0.35)';
+            ctx.shadowBlur = 4 * p.z;
+          }
         }
         ctx.fill();
       }
-      ctx.shadowBlur = 0;
+      if (!lowPowerDevice) {
+        ctx.shadowBlur = 0;
+      }
 
-      if (!reducedMotion) {
+      if (!reducedMotion && !document.hidden) {
         rafId = requestAnimationFrame(drawFrame);
       }
     };
+
+    const onVisibilityChange = () => {
+      if (reducedMotion) return;
+      if (document.hidden) {
+        cancelAnimationFrame(rafId);
+      } else {
+        lastTime = performance.now();
+        rafId = requestAnimationFrame(drawFrame);
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     if (reducedMotion) {
       drawFrame(performance.now());
@@ -219,6 +237,7 @@ export function StudioAtmosphereCanvas() {
 
     return () => {
       cancelAnimationFrame(rafId);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('resize', resize);
       window.removeEventListener('scroll', onScroll);
       window.removeEventListener('mousemove', onMouseMove);

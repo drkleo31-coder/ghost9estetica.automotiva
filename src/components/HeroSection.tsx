@@ -1,22 +1,25 @@
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowDownRight, CalendarCheck2, Pause, Play } from 'lucide-react';
 import { motion, useReducedMotion, useScroll, useTransform } from 'motion/react';
 import { BRAND_INFO, HERO_MEDIA } from '../data/ghost9';
+import { canRevealHeroVideo, shouldAttemptHeroAutoPlay } from '../utils/heroMedia';
 
 interface HeroSectionProps {
   onOpenBooking: () => void;
 }
 
 export function HeroSection({ onOpenBooking }: HeroSectionProps) {
-  const prefersReducedMotion = useReducedMotion();
+  const prefersReducedMotion = Boolean(useReducedMotion());
   const sectionRef = useRef<HTMLElement | null>(null);
   const desktopVideoRef = useRef<HTMLVideoElement | null>(null);
   const mobileVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const [pointer, setPointer] = useState({ x: 0, y: 0 });
-  const [heroImgFailed, setHeroImgFailed] = useState(false);
+  const [posterImgFailed, setPosterImgFailed] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
-  const [isPlaying, setIsPlaying] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(!prefersReducedMotion);
+  const [desktopVideoReady, setDesktopVideoReady] = useState(false);
+  const [mobileVideoReady, setMobileVideoReady] = useState(false);
 
   const { scrollYProgress } = useScroll({
     target: sectionRef,
@@ -24,6 +27,90 @@ export function HeroSection({ onOpenBooking }: HeroSectionProps) {
   });
   const bgScrollY = useTransform(scrollYProgress, [0, 1], ['0%', '14%']);
   const reelScrollY = useTransform(scrollYProgress, [0, 1], [0, 42]);
+
+  const setMutedAttributes = useCallback((node: HTMLVideoElement | null) => {
+    if (!node) return;
+    node.defaultMuted = true;
+    node.muted = true;
+  }, []);
+
+  const setMobileVideoNode = useCallback(
+    (node: HTMLVideoElement | null) => {
+      mobileVideoRef.current = node;
+      setMutedAttributes(node);
+    },
+    [setMutedAttributes],
+  );
+
+  const setDesktopVideoNode = useCallback(
+    (node: HTMLVideoElement | null) => {
+      desktopVideoRef.current = node;
+      setMutedAttributes(node);
+    },
+    [setMutedAttributes],
+  );
+
+  useEffect(() => {
+    const syncCachedPlayback = (
+      video: HTMLVideoElement | null,
+      setReady: (ready: boolean) => void,
+    ) => {
+      if (!video) return;
+      if (
+        canRevealHeroVideo({
+          hasStartedPlaying: !video.paused && video.currentTime >= 0,
+          readyState: video.readyState,
+          videoFailed,
+        })
+      ) {
+        setReady(true);
+      } else if (
+        shouldAttemptHeroAutoPlay({
+          prefersReducedMotion,
+          isPlaying,
+          videoFailed,
+          paused: video.paused,
+          readyState: video.readyState,
+        })
+      ) {
+        video.play().catch(() => {});
+      }
+    };
+
+    syncCachedPlayback(desktopVideoRef.current, setDesktopVideoReady);
+    syncCachedPlayback(mobileVideoRef.current, setMobileVideoReady);
+  }, [isPlaying, prefersReducedMotion, videoFailed]);
+
+  const handleVideoCanPlay = (video: HTMLVideoElement | null) => {
+    if (!video) return;
+    if (
+      shouldAttemptHeroAutoPlay({
+        prefersReducedMotion,
+        isPlaying,
+        videoFailed,
+        paused: video.paused,
+        readyState: video.readyState,
+      })
+    ) {
+      video.play().catch(() => {});
+    }
+  };
+
+  const handleVideoPlaying = (
+    video: HTMLVideoElement | null,
+    setReady: (ready: boolean) => void,
+  ) => {
+    if (!video) return;
+    const ready = canRevealHeroVideo({
+      hasStartedPlaying: true,
+      readyState: video.readyState,
+      videoFailed,
+    });
+    if (!ready) return;
+    requestAnimationFrame(() => {
+      setReady(true);
+    });
+  };
 
   const handlePointerMove = (e: React.MouseEvent<HTMLElement>) => {
     if (prefersReducedMotion) return;
@@ -58,32 +145,53 @@ export function HeroSection({ onOpenBooking }: HeroSectionProps) {
       onMouseLeave={handlePointerLeave}
       className="relative flex min-h-[100svh] items-center overflow-hidden pt-24 pb-16 sm:pb-20"
     >
-      {/* Background Depth Layer: Mobile Real Video (Portrait 9:16 Native Fit) + Desktop Ambient Supercar Backdrop */}
+      {/* Background Depth Layer: Mobile Real Video + Seamless Frame-0 Cover, Desktop Real Studio Backdrop */}
       <motion.div
         style={prefersReducedMotion ? undefined : { y: bgScrollY }}
         className="pointer-events-none absolute inset-0 z-0 overflow-hidden"
       >
-        {/* Mobile full-bleed real video (9:16 matches mobile portrait naturally without distortion) */}
-        {!videoFailed && (
-          <video
-            ref={mobileVideoRef}
-            src={HERO_MEDIA.video}
-            poster={HERO_MEDIA.image}
-            autoPlay={!prefersReducedMotion}
-            muted
-            loop
-            playsInline
-            preload="metadata"
-            aria-label={HERO_MEDIA.videoLabel}
-            onError={() => setVideoFailed(true)}
-            className="h-full w-full object-cover object-center brightness-[0.72] contrast-[1.08] lg:hidden"
-          />
-        )}
+        {/* Mobile full-bleed stage (9:16 matches mobile portrait naturally without distortion) */}
+        <div className="relative h-full w-full lg:hidden">
+          {!videoFailed && (
+            <video
+              ref={setMobileVideoNode}
+              data-testid="hero-mobile-video"
+              src={HERO_MEDIA.video}
+              poster={HERO_MEDIA.poster}
+              autoPlay={!prefersReducedMotion}
+              muted
+              loop
+              playsInline
+              preload="auto"
+              aria-label={HERO_MEDIA.videoLabel}
+              onCanPlay={(e) => handleVideoCanPlay(e.currentTarget)}
+              onPlaying={(e) => handleVideoPlaying(e.currentTarget, setMobileVideoReady)}
+              onError={() => setVideoFailed(true)}
+              className="h-full w-full object-cover object-center brightness-[0.72] contrast-[1.08]"
+            />
+          )}
 
-        {/* Desktop ambient backdrop (subtle parallax behind the cinema reel) */}
-        {!heroImgFailed ? (
+          {/* Real Frame-0 Cover stays visible with identical framing until playback starts */}
+          {!posterImgFailed && (
+            <img
+              data-testid="hero-mobile-poster"
+              src={HERO_MEDIA.poster}
+              alt={HERO_MEDIA.posterAlt}
+              fetchPriority="high"
+              loading="eager"
+              decoding="sync"
+              onError={() => setPosterImgFailed(true)}
+              className={`absolute inset-0 h-full w-full object-cover object-center brightness-[0.72] contrast-[1.08] transition-opacity duration-500 ease-out ${
+                mobileVideoReady && !videoFailed ? 'opacity-0' : 'opacity-100'
+              }`}
+            />
+          )}
+        </div>
+
+        {/* Desktop ambient backdrop derived from the real car frame (no generic placeholder) */}
+        {!posterImgFailed ? (
           <motion.div
-            className={`h-full w-full ${!videoFailed ? 'hidden lg:block' : 'block'}`}
+            className="hidden h-full w-full lg:block"
             animate={
               prefersReducedMotion
                 ? undefined
@@ -96,15 +204,15 @@ export function HeroSection({ onOpenBooking }: HeroSectionProps) {
             transition={{ type: 'spring', stiffness: 65, damping: 24, mass: 0.9 }}
           >
             <img
-              src={HERO_MEDIA.image}
-              alt={HERO_MEDIA.imageAlt}
-              referrerPolicy="no-referrer"
-              onError={() => setHeroImgFailed(true)}
-              className="h-full w-full object-cover object-center opacity-55 brightness-[0.82] contrast-[1.08]"
+              src={HERO_MEDIA.poster}
+              alt=""
+              aria-hidden="true"
+              loading="eager"
+              className="h-full w-full scale-105 object-cover object-center opacity-30 brightness-[0.55] contrast-[1.1] blur-[3px]"
             />
           </motion.div>
         ) : (
-          <div className="h-full w-full bg-[radial-gradient(circle_at_70%_40%,rgba(225,29,46,0.22),#050507_70%)]" />
+          <div className="hidden h-full w-full bg-[radial-gradient(circle_at_70%_40%,rgba(225,29,46,0.22),#050507_70%)] lg:block" />
         )}
 
         {/* Cinematic Dark Masks & Crimson Studio Rim Lighting */}
@@ -214,60 +322,80 @@ export function HeroSection({ onOpenBooking }: HeroSectionProps) {
           </motion.div>
         </div>
 
-        {/* Desktop Cinema-Masked Real Video Showcase (Vídeo 2 — Native Portrait Ratio, Zero Distortion) */}
-        {!videoFailed && (
-          <motion.div
-            style={prefersReducedMotion ? undefined : { y: reelScrollY, perspective: 1100 }}
-            initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.96 }}
-            animate={
-              prefersReducedMotion
-                ? { opacity: 1 }
-                : {
-                    opacity: 1,
-                    scale: 1,
-                    rotateY: pointer.x * 5,
-                    rotateX: pointer.y * -4,
-                  }
-            }
-            transition={{ duration: 0.7, delay: 0.16, ease: [0.16, 1, 0.3, 1] }}
-            className="hidden lg:flex lg:col-span-5 lg:justify-end"
-          >
-            <div className="relative aspect-[9/14] w-full max-w-[360px] overflow-hidden rounded-2xl border border-white/15 bg-[#050507] shadow-[0_28px_70px_rgba(0,0,0,0.85)]">
+        {/* Desktop Cinema-Masked Real Video Showcase (Frame-0 Cover -> Seamless Playback) */}
+        <motion.div
+          style={prefersReducedMotion ? undefined : { y: reelScrollY, perspective: 1100 }}
+          initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.96 }}
+          animate={
+            prefersReducedMotion
+              ? { opacity: 1 }
+              : {
+                  opacity: 1,
+                  scale: 1,
+                  rotateY: pointer.x * 5,
+                  rotateX: pointer.y * -4,
+                }
+          }
+          transition={{ duration: 0.7, delay: 0.16, ease: [0.16, 1, 0.3, 1] }}
+          className="hidden lg:flex lg:col-span-5 lg:justify-end"
+        >
+          <div className="relative aspect-[9/14] w-full max-w-[360px] overflow-hidden rounded-2xl border border-white/15 bg-[#050507] shadow-[0_28px_70px_rgba(0,0,0,0.85)]">
+            {!videoFailed && (
               <video
-                ref={desktopVideoRef}
+                ref={setDesktopVideoNode}
                 data-testid="hero-showcase-video"
                 src={HERO_MEDIA.video}
-                poster={HERO_MEDIA.image}
+                poster={HERO_MEDIA.poster}
                 autoPlay={!prefersReducedMotion}
                 muted
                 loop
                 playsInline
-                preload="metadata"
+                preload="auto"
                 aria-label={HERO_MEDIA.videoLabel}
+                onCanPlay={(e) => handleVideoCanPlay(e.currentTarget)}
+                onPlaying={(e) => handleVideoPlaying(e.currentTarget, setDesktopVideoReady)}
                 onError={() => setVideoFailed(true)}
                 className="h-full w-full object-cover object-center"
               />
+            )}
 
-              {/* Feathered Cinema Mask & Crimson Rim Overlay */}
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#050507] via-transparent to-[#050507]/55"
+            {/* Real Frame-0 Cover locked to exact same framing until playback begins */}
+            {!posterImgFailed && (
+              <img
+                data-testid="hero-desktop-poster"
+                src={HERO_MEDIA.poster}
+                alt={HERO_MEDIA.posterAlt}
+                fetchPriority="high"
+                loading="eager"
+                decoding="sync"
+                onError={() => setPosterImgFailed(true)}
+                className={`pointer-events-none absolute inset-0 h-full w-full object-cover object-center transition-opacity duration-500 ease-out ${
+                  desktopVideoReady && !videoFailed ? 'opacity-0' : 'opacity-100'
+                }`}
               />
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-0 ring-1 ring-inset ring-[#E11D2E]/30 rounded-2xl"
-              />
+            )}
 
-              <div className="absolute inset-x-4 bottom-4 flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#E11D2E]">
-                    Estúdio GHOST 9
-                  </p>
-                  <p className="text-xs font-medium text-white/90">
-                    Brilho e reflexo real em cabine
-                  </p>
-                </div>
+            {/* Feathered Cinema Mask & Crimson Rim Overlay */}
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#050507] via-transparent to-[#050507]/55"
+            />
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-inset ring-[#E11D2E]/30"
+            />
 
+            <div className="absolute inset-x-4 bottom-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#E11D2E]">
+                  Estúdio GHOST 9
+                </p>
+                <p className="text-xs font-medium text-white/90">
+                  Brilho e reflexo real em cabine
+                </p>
+              </div>
+
+              {!videoFailed && (
                 <button
                   type="button"
                   onClick={togglePlayback}
@@ -276,10 +404,10 @@ export function HeroSection({ onOpenBooking }: HeroSectionProps) {
                 >
                   {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
                 </button>
-              </div>
+              )}
             </div>
-          </motion.div>
-        )}
+          </div>
+        </motion.div>
       </div>
     </section>
   );

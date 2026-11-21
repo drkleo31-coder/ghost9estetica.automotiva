@@ -37,13 +37,13 @@ export const BRAND_INFO = {
 
 export const VIDEO_ASSETS = {
   polimento: '/assets/aistudio/snapinsta-1795224888524_aa41db63.mp4',
-  heroWalkaround: '/assets/aistudio/snapinsta-1795224817156_1f06128a.mp4',
+  heroWalkaround: '/assets/hero-ghost9-web.mp4',
   detalhamento: '/assets/aistudio/snapinsta-1795224758815_8591732d.mp4',
 } as const;
 
 export const HERO_MEDIA = {
-  image: '/src/assets/images/hero_black_supercar_1795225247300.jpg',
-  imageAlt: 'Automóvel esportivo preto em estúdio escuro com iluminação vermelha e reflexos na lataria',
+  poster: '/assets/hero-ghost9-poster.webp',
+  posterAlt: 'Primeiro frame real do carro preto no estúdio GHOST 9 com acabamento brilhante',
   video: VIDEO_ASSETS.heroWalkaround,
   videoLabel: 'Apresentação real de veículo preto com acabamento brilhante em estúdio',
 } as const;

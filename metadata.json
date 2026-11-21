@@ -1,0 +1,6 @@
+{
+  "name": "GHOST 9 Estética Automotiva",
+  "description": "Experiência digital automotiva premium da GHOST 9 Estética Automotiva em Limeira, SP. Polimento automotivo, correção de pintura, espelhamento, vitrificação, detalhamento completo e higienização interna.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

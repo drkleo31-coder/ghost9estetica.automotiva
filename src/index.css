@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Barlow Condensed", sans-serif;
+  --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+
+  --color-obsidian: #050507;
+  --color-graphite: #0D0E12;
+  --color-carbon: #15171E;
+  --color-crimson: #E11D2E;
+  --color-crimson-deep: #99111E;
+  --color-chrome: #F4F5F7;
+  --color-ash: #9CA3AF;
+}
+
+@layer base {
+  html {
+    background-color: #050507;
+    color: #F4F5F7;
+    font-family: var(--font-sans);
+    scroll-behavior: smooth;
+    overflow-x: clip;
+  }
+
+  body {
+    background-color: #050507;
+    color: #F4F5F7;
+    overflow-x: clip;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+}
+
+.font-display-ghost {
+  font-family: var(--font-display);
+}
+
+.font-mono-ghost {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  body.has-custom-cursor,
+  body.has-custom-cursor a,
+  body.has-custom-cursor button,
+  body.has-custom-cursor [role="slider"] {
+    cursor: none;
+  }
+}
+
+/* Subtle metallic hairline divider */
+.hairline-chrome {
+  border-color: rgba(244, 245, 247, 0.1);
+}
+
+.hairline-crimson {
+  border-color: rgba(225, 29, 46, 0.35);
+}
+
+/* Shimmer sweep on primary CTA */
+@keyframes ghost-sweep {
+  0% {
+    transform: translateX(-140%) skewX(-20deg);
+  }
+  100% {
+    transform: translateX(240%) skewX(-20deg);
+  }
+}
+
+.btn-luminous-sweep::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 45%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.28),
+    transparent
+  );
+  transform: translateX(-140%) skewX(-20deg);
+  transition: transform 0.65s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: none;
+}
+
+.btn-luminous-sweep:hover::after {
+  animation: ghost-sweep 0.85s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-luminous-sweep:hover::after {
+    animation: none;
+  }
+}
